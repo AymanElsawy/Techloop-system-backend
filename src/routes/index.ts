@@ -13,6 +13,9 @@ import { dashboardRoutes } from '../modules/dashboard/dashboard.routes.js';
 import { documentRoutes } from '../modules/documents/documents.routes.js';
 import { settingsRoutes } from '../modules/settings/settings.routes.js';
 import { returnRoutes } from '../modules/returns/return.routes.js';
+import { notificationRoutes } from '../modules/notifications/notification.routes.js';
+import { reportRoutes } from '../modules/reports/report.routes.js';
+import { publicRoutes } from '../modules/public/statement.js';
 
 export const routes = Router();
 
@@ -30,4 +33,8 @@ routes.use('/dashboard', dashboardRoutes);
 routes.use('/documents', documentRoutes);
 routes.use('/settings', settingsRoutes);
 routes.use('/returns', returnRoutes);
-// Next phases: /orders, /reports
+routes.use('/notifications', notificationRoutes);
+routes.use('/reports', reportRoutes);
+// No login: public balance links (رابط المديونية).
+routes.use('/public', publicRoutes);
+// Next phases: /orders

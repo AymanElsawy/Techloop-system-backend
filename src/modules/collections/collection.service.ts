@@ -9,6 +9,8 @@ import type { UserDocument } from '../users/user.model.js';
 import { UserRole } from '../users/user.types.js';
 import { AppError } from '../../utils/api-response.js';
 import { assertLinkableVisit } from '../visits/visit.service.js';
+import { notify } from '../notifications/notification.service.js';
+import { DocumentType } from '../documents/documents.routes.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -57,7 +59,26 @@ export async function createCollection(input: CreateCollectionInput, actor: User
   });
 
   await syncCustomerSummary(customer._id);
-  return collection.populate(withRefs);
+  return notifyCollection(await collection.populate(withRefs), actor);
+}
+
+async function notifyCollection<T extends InstanceType<typeof CollectionModel>>(
+  collection: T,
+  actor: UserDocument,
+  cancelled = false,
+) {
+  await notify(
+    {
+      type: DocumentType.COLLECTION,
+      cancelled,
+      docId: collection.id,
+      number: collection.receiptNumber,
+      party: collection.customer,
+      amount: collection.amount,
+    },
+    actor,
+  );
+  return collection;
 }
 
 export function listCollections(
@@ -94,7 +115,7 @@ export async function cancelCollection(id: string, reason: string, actor: UserDo
   });
   await collection.save();
   await syncCustomerSummary(collection.customer._id);
-  return collection.populate(withRefs);
+  return notifyCollection(await collection.populate(withRefs), actor, true);
 }
 
 export async function addAttachment(

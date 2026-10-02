@@ -22,6 +22,12 @@ const customerSchema = new Schema(
     },
 
     notes: { type: String, default: null },
+    // حد الائتمان: max debt a rep may sell up to; null = no limit. Managers only.
+    creditLimit: { type: Number, default: null },
+    // مدة السداد: new invoices are due this many days after the sale; null = no terms. Managers only.
+    paymentTermDays: { type: Number, default: null },
+    // Default discount on this customer's invoices, and the most a rep may give; null = none. Managers only.
+    discountPercent: { type: Number, default: null },
 
     status: { type: String, enum: Object.values(CustomerStatus), required: true },
     rejectionReason: { type: String, default: null },
@@ -38,6 +44,8 @@ const customerSchema = new Schema(
     lastCollection: { type: moneyEvent, default: null },
     // Collected by a rep but not yet handed to the treasury; not deducted from debit yet.
     pendingPayments: { type: Number, default: 0 },
+    // Fixed public balance link (رابط المديونية); created on first use, see modules/public/statement.ts.
+    shareToken: { type: String, default: null },
   },
   {
     timestamps: true,
@@ -58,6 +66,10 @@ customerSchema.index(
   { unique: true, partialFilterExpression: { phone: { $type: 'string' } } },
 );
 customerSchema.index({ governorate: 1, name: 1 });
+customerSchema.index(
+  { shareToken: 1 },
+  { unique: true, partialFilterExpression: { shareToken: { $type: 'string' } } },
+);
 
 export type Customer = InferSchemaType<typeof customerSchema>;
 export type CustomerDocument = HydratedDocument<Customer>;

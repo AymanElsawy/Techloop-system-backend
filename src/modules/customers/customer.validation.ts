@@ -30,6 +30,10 @@ export const createCustomerSchema = z.object({
     .object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) })
     .nullish(),
   notes: optionalText(1000),
+  // Managers only (checked in the service).
+  creditLimit: z.number().nonnegative().nullish(),
+  paymentTermDays: z.number().int().min(0).max(365).nullish(),
+  discountPercent: z.number().min(0).max(100).nullish(),
 });
 
 export const updateCustomerSchema = createCustomerSchema.partial();

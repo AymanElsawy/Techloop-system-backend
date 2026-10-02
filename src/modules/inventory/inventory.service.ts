@@ -2,18 +2,29 @@ import { Types } from 'mongoose';
 import { MovementModel, StockModel, WarehouseModel } from './inventory.model.js';
 import { MovementType } from './inventory.types.js';
 import type {
+  AdjustInput,
   CreateWarehouseInput,
   ListMovementsFilters,
   ReceiveInput,
   StockItemInput,
   TransferInput,
   UpdateWarehouseInput,
+  WarehouseTransferInput,
 } from './inventory.validation.js';
 import { ProductModel } from '../products/product.model.js';
 import { UserModel, type UserDocument } from '../users/user.model.js';
 import { UserRole } from '../users/user.types.js';
 import { AppError } from '../../utils/api-response.js';
 import { findActiveSupplier } from '../suppliers/supplier.service.js';
+import { syncSupplierDebt } from '../suppliers/supplier-balance.js';
+import {
+  LOW_STOCK,
+  STOCK_ADDED,
+  STOCK_RETURNED,
+  notify,
+  notifyWarehouse,
+} from '../notifications/notification.service.js';
+import { DocumentType } from '../documents/documents.routes.js';
 
 type Id = Types.ObjectId;
 /** A stock location: a warehouse's main stock or a rep's custody (exactly one is set). */
@@ -25,6 +36,13 @@ const custodyOf = (rep: Id): Location => ({ warehouse: null, rep });
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
+
+/** A warehouse rep only operates their assigned warehouse; managers operate any. */
+function assertWarehouseAccess(actor: UserDocument, warehouseId: Id) {
+  if (actor.role === UserRole.WAREHOUSE_REP && String(actor.warehouse) !== String(warehouseId)) {
+    throw new AppError(403, 'Forbidden');
+  }
+}
 
 const productRef = { path: 'product', select: 'name code unit price minQuantity isActive' };
 
@@ -84,9 +102,11 @@ export async function totalsByProduct(productIds?: Id[]) {
 
 // ---------- warehouses ----------
 
-export async function listWarehouses() {
+export async function listWarehouses(actor: UserDocument) {
+  if (actor.role === UserRole.WAREHOUSE_REP && !actor.warehouse) return [];
+  const scope = actor.role === UserRole.WAREHOUSE_REP ? { _id: actor.warehouse } : {};
   const [warehouses, totals, reps] = await Promise.all([
-    WarehouseModel.find().sort({ name: 1 }),
+    WarehouseModel.find(scope).sort({ name: 1 }),
     StockModel.aggregate<{ _id: Id; total: number }>([
       { $match: { warehouse: { $ne: null } } },
       { $group: { _id: '$warehouse', total: { $sum: '$quantity' } } },
@@ -128,10 +148,11 @@ export async function updateWarehouse(id: string, input: UpdateWarehouseInput) {
 }
 
 /** Main stock plus every rep attached to the warehouse with their custody. */
-export async function getWarehouseDetails(id: string) {
+export async function getWarehouseDetails(id: string, actor: UserDocument) {
   const warehouse = await findWarehouse(id);
+  assertWarehouseAccess(actor, warehouse._id);
   const reps = await UserModel.find({ role: UserRole.SALES_REP, warehouse: warehouse._id })
-    .select('name email isActive')
+    .select('name username isActive')
     .sort({ name: 1 });
   const [stock, custody] = await Promise.all([
     StockModel.find({ ...mainOf(warehouse._id), quantity: { $gt: 0 } }).populate(productRef),
@@ -158,17 +179,52 @@ function logMovement(
     rep?: Id | null;
     invoice?: Id | null;
     supplier?: Id | null;
+    toWarehouse?: Id | null;
     notes?: string | null;
+    totalCost?: number | null;
+    paidAmount?: number | null;
   },
   items: (LineItem & { fromCustody?: number; unitCost?: number })[],
   actor: UserDocument,
 ) {
   return nextMovementNumber(type)
     .then((number) => MovementModel.create({ type, number, ...data, items, createdBy: actor._id }))
-    .then((movement) => movement.populate(movementRefs));
+    .then(async (movement) => {
+      // Only these take goods out of the system; issue / return just move them.
+      if (type === MovementType.SALE || type === MovementType.SALE_RETURN_CANCEL)
+        await alertLowStock(items).catch((err: unknown) =>
+          console.error('Low-stock alert failed', err),
+        );
+      return movement.populate(movementRefs);
+    });
 }
 
-const NUMBERED = new Set([MovementType.RECEIVE, MovementType.ISSUE, MovementType.RETURN]);
+/**
+ * Tells managers when a product's total stock drops to its reorder level (minQuantity).
+ * Only on crossing it, not on every later sale while it stays below.
+ */
+async function alertLowStock(items: LineItem[]) {
+  const ids = items.map((i) => i.product);
+  const [totals, products] = await Promise.all([
+    totalsByProduct(ids),
+    ProductModel.find({ _id: { $in: ids }, minQuantity: { $ne: null } }).select('name minQuantity'),
+  ]);
+  for (const p of products) {
+    const min = p.minQuantity!;
+    const after = totals.get(p.id as string) ?? 0;
+    const taken = items.filter((i) => i.product.equals(p._id)).reduce((s, i) => s + i.quantity, 0);
+    if (after <= min && after + taken > min)
+      await notify({ type: LOW_STOCK, docId: p.id, number: null, party: p, quantity: after }, null);
+  }
+}
+
+const NUMBERED = new Set([
+  MovementType.RECEIVE,
+  MovementType.ISSUE,
+  MovementType.RETURN,
+  MovementType.ADJUST,
+  MovementType.TRANSFER,
+]);
 
 // ponytail: max+1 per type, a concurrent insert can get the same number; add a counter doc if it matters.
 async function nextMovementNumber(type: MovementType) {
@@ -178,18 +234,32 @@ async function nextMovementNumber(type: MovementType) {
 }
 
 const movementRefs = [
-  { path: 'warehouse', select: 'name' },
+  { path: 'warehouse toWarehouse', select: 'name' },
   { path: 'rep createdBy', select: 'name' },
   { path: 'invoice', select: 'invoiceNumber' },
   { path: 'supplier', select: 'name phone company address' },
 ];
 
-/** One movement, e.g. for printing. Reps only see their own custody movements, never purchases. */
+/**
+ * Movements a user may see: managers all; a warehouse rep the issues/returns of their warehouse
+ * (what they operate, no purchases); a sales rep their own custody movements.
+ */
+function movementScope(actor: UserDocument) {
+  if (isManager(actor)) return {};
+  if (actor.role === UserRole.WAREHOUSE_REP) {
+    return {
+      warehouse: actor.warehouse ?? new Types.ObjectId(), // none assigned: matches nothing
+      type: { $in: [MovementType.ISSUE, MovementType.RETURN] },
+    };
+  }
+  return { rep: actor._id };
+}
+
+/** One movement, e.g. for printing. */
 export async function getMovement(id: string, actor: UserDocument) {
-  const movement = await MovementModel.findOne({
-    _id: id,
-    ...(!isManager(actor) && { rep: actor._id }),
-  }).populate(movementRefs);
+  const movement = await MovementModel.findOne({ _id: id, ...movementScope(actor) }).populate(
+    movementRefs,
+  );
   if (!movement) throw new AppError(404, 'Movement not found');
   return movement;
 }
@@ -206,6 +276,10 @@ export async function receiveStock(id: string, input: ReceiveInput, actor: UserD
   const supplier = await findActiveSupplier(input.supplierId);
   const lines = await toLineItems(input.items);
   const items = lines.map((l, i) => ({ ...l, unitCost: round2(input.items[i]!.unitCost) }));
+
+  const totalCost = round2(items.reduce((sum, i) => sum + i.quantity * i.unitCost!, 0));
+  const paidAmount = input.paidAmount != null ? round2(input.paidAmount) : totalCost;
+  if (paidAmount > totalCost) throw new AppError(400, 'Paid amount exceeds the total cost');
 
   const before = await totalsByProduct(items.map((i) => i.product));
   await moveItems(null, mainOf(warehouse._id), items);
@@ -227,12 +301,25 @@ export async function receiveStock(id: string, input: ReceiveInput, actor: UserD
     await product.save();
   }
 
-  return logMovement(
+  const movement = await logMovement(
     MovementType.RECEIVE,
-    { warehouse: warehouse._id, supplier: supplier._id, notes: input.notes },
+    { warehouse: warehouse._id, supplier: supplier._id, notes: input.notes, totalCost, paidAmount },
     items,
     actor,
   );
+  await syncSupplierDebt(supplier._id);
+  await notify(
+    {
+      type: DocumentType.PURCHASE,
+      docId: movement.id,
+      number: movement.number,
+      party: movement.supplier,
+      amount: totalCost,
+    },
+    actor,
+  );
+  await notifyWarehouse(STOCK_ADDED, warehouse._id, actor);
+  return movement;
 }
 
 /** The rep must be attached to this warehouse. */
@@ -246,41 +333,127 @@ async function findRepOf(warehouseId: Id, repId: string) {
 
 export async function issueToRep(id: string, input: TransferInput, actor: UserDocument) {
   const warehouse = await findActiveWarehouse(id);
+  assertWarehouseAccess(actor, warehouse._id);
   const rep = await findRepOf(warehouse._id, input.repId);
   const items = await toLineItems(input.items);
   await moveItems(mainOf(warehouse._id), custodyOf(rep._id), items);
-  return logMovement(
+  const movement = await logMovement(
     MovementType.ISSUE,
     { warehouse: warehouse._id, rep: rep._id, notes: input.notes },
     items,
     actor,
   );
+  await notify(
+    { type: DocumentType.ISSUE, docId: movement.id, number: movement.number, party: rep },
+    actor,
+    rep._id,
+  );
+  return movement;
 }
 
 export async function returnFromRep(id: string, input: TransferInput, actor: UserDocument) {
   const warehouse = await findWarehouse(id);
+  assertWarehouseAccess(actor, warehouse._id);
   const rep = await findRepOf(warehouse._id, input.repId);
   const items = await toLineItems(input.items);
   await moveItems(custodyOf(rep._id), mainOf(warehouse._id), items);
-  return logMovement(
+  const movement = await logMovement(
     MovementType.RETURN,
     { warehouse: warehouse._id, rep: rep._id, notes: input.notes },
     items,
     actor,
   );
+  await notify(
+    { type: DocumentType.RETURN, docId: movement.id, number: movement.number, party: rep },
+    actor,
+    rep._id,
+  );
+  await notifyWarehouse(STOCK_RETURNED, warehouse._id, actor);
+  return movement;
 }
 
-/** Reps only see movements of their own custody. */
-export function listMovements(
-  { warehouseId, repId, type, supplierId }: ListMovementsFilters,
+/**
+ * تسوية جرد (managers): the counted quantity replaces the warehouse's main stock; the movement
+ * records the signed difference per product with the reason. Average cost doesn't change.
+ */
+export async function adjustStock(id: string, input: AdjustInput, actor: UserDocument) {
+  const warehouse = await findActiveWarehouse(id);
+  const lines = await toLineItems(
+    input.items.map((i) => ({ productId: i.productId, quantity: 1 })),
+  );
+  const current = await StockModel.find({
+    ...mainOf(warehouse._id),
+    product: { $in: lines.map((l) => l.product) },
+  });
+  const onHand = new Map(current.map((s) => [String(s.product), s.quantity]));
+  const diffs = lines
+    .map((l, i) => ({
+      ...l,
+      quantity: input.items[i]!.counted - (onHand.get(String(l.product)) ?? 0),
+    }))
+    .filter((l) => l.quantity !== 0);
+  if (!diffs.length) throw new AppError(400, 'Counted stock matches the system');
+
+  const shortage = diffs
+    .filter((d) => d.quantity < 0)
+    .map((d) => ({ ...d, quantity: -d.quantity }));
+  await moveItems(mainOf(warehouse._id), null, shortage); // a sale in between makes this fail, not go negative
+  await moveItems(
+    null,
+    mainOf(warehouse._id),
+    diffs.filter((d) => d.quantity > 0),
+  );
+  const movement = await logMovement(
+    MovementType.ADJUST,
+    { warehouse: warehouse._id, notes: input.reason },
+    diffs,
+    actor,
+  );
+  if (shortage.length)
+    await alertLowStock(shortage).catch((err: unknown) =>
+      console.error('Low-stock alert failed', err),
+    );
+  return movement;
+}
+
+/** Main stock of one warehouse to another (managers). Shows in both warehouses' logs. */
+export async function transferStock(
+  id: string,
+  input: WarehouseTransferInput,
   actor: UserDocument,
 ) {
-  const rep = isManager(actor) ? repId : actor.id;
+  const from = await findActiveWarehouse(id);
+  const to = await findActiveWarehouse(input.toWarehouseId);
+  if (from._id.equals(to._id)) throw new AppError(400, 'Pick a different warehouse');
+  const items = await toLineItems(input.items);
+  await moveItems(mainOf(from._id), mainOf(to._id), items);
+  const movement = await logMovement(
+    MovementType.TRANSFER,
+    { warehouse: from._id, toWarehouse: to._id, notes: input.notes },
+    items,
+    actor,
+  );
+  await notifyWarehouse(STOCK_ADDED, to._id, actor);
+  return movement;
+}
+
+/** Filters apply inside the actor's scope (see movementScope). */
+export function listMovements(
+  { warehouseId, repId, type, supplierId, productId }: ListMovementsFilters,
+  actor: UserDocument,
+) {
   return MovementModel.find({
-    ...(warehouseId && { warehouse: warehouseId }),
-    ...(rep && { rep }),
-    ...(type && { type }),
-    ...(supplierId && { supplier: supplierId }),
+    $and: [
+      movementScope(actor),
+      {
+        // A transfer shows in both warehouses' logs.
+        ...(warehouseId && { $or: [{ warehouse: warehouseId }, { toWarehouse: warehouseId }] }),
+        ...(repId && { rep: repId }),
+        ...(type && { type }),
+        ...(supplierId && { supplier: supplierId }),
+        ...(productId && { 'items.product': productId }),
+      },
+    ],
   })
     .sort({ createdAt: -1 })
     .limit(300) // ponytail: fixed cap, add paging when the log grows

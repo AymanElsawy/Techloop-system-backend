@@ -1,7 +1,12 @@
 import { InvoiceModel } from './invoice.model.js';
 import { AttachmentKind, InvoiceStatus, PaymentMethod } from './invoice.types.js';
 import type { CreateInvoiceInput, ListInvoicesFilters } from './invoice.validation.js';
-import { getCollectableDebt, syncCustomerSummary } from '../customers/customer-balance.js';
+import {
+  dueDateFor,
+  getCollectableDebt,
+  getOverdue,
+  syncCustomerSummary,
+} from '../customers/customer-balance.js';
 import { DepositStatus } from '../treasury/treasury.types.js';
 import { CustomerStatus } from '../customers/customer.types.js';
 import { getCustomerById } from '../customers/customer.service.js';
@@ -13,6 +18,8 @@ import { assertLinkableVisit } from '../visits/visit.service.js';
 import { logSale, returnSale, takeForSale } from '../inventory/inventory.service.js';
 import { MovementType } from '../inventory/inventory.types.js';
 import { ReturnModel, ReturnStatus } from '../returns/return.model.js';
+import { notify } from '../notifications/notification.service.js';
+import { DocumentType } from '../documents/documents.routes.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -48,19 +55,27 @@ export async function createInvoice(input: CreateInvoiceInput, actor: UserDocume
     throw new AppError(400, 'One or more products are not available');
   const byId = new Map(products.map((p) => [p.id as string, p]));
 
-  // Prices come from the database, never from the client.
-  const items = input.items.map(({ productId, quantity }) => {
+  // The seller sets each line's price (defaults to the product's sale price). A rep's discount is capped at the customer's.
+  const maxDiscount = isManager(actor) ? 100 : (customer.discountPercent ?? 0);
+  const items = input.items.map(({ productId, quantity, unitPrice, discountPercent }) => {
     const p = byId.get(productId)!;
+    const discount = discountPercent ?? customer.discountPercent ?? 0;
+    const price = round2(unitPrice ?? p.price);
+    if (discount > maxDiscount)
+      throw new AppError(400, `Discount above the allowed ${maxDiscount}%`);
     return {
       product: p._id,
       name: p.name,
       unit: p.unit,
-      unitPrice: p.price,
+      unitPrice: price,
+      unitCost: p.avgCost ?? p.lastCost ?? null,
+      discountPercent: discount,
       quantity,
-      total: round2(p.price * quantity),
+      total: round2(price * quantity * (1 - discount / 100)),
     };
   });
   const total = round2(items.reduce((sum, i) => sum + i.total, 0));
+  const gross = round2(items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0));
   const paidAmount = round2(input.paidAmount);
 
   // Anything paid above the invoice total settles the customer's previous debt.
@@ -71,6 +86,18 @@ export async function createInvoice(input: CreateInvoiceInput, actor: UserDocume
       400,
       `Paid amount cannot exceed the invoice total plus the customer's previous debt (${round2(total + previousDebt)})`,
     );
+  }
+
+  // A rep can't take the customer over the credit limit; a paid-down invoice is always fine.
+  const debtAfter = round2(previousDebt + total - paidAmount);
+  const limit = customer.creditLimit;
+  if (!isManager(actor) && limit != null && debtAfter > limit && debtAfter > previousDebt) {
+    throw new AppError(400, `Credit limit exceeded (${limit})`);
+  }
+  // Nor sell more on credit while the customer has invoices past due.
+  if (!isManager(actor) && debtAfter > previousDebt) {
+    const overdue = await getOverdue(customer._id);
+    if (overdue > 0) throw new AppError(400, `Customer has overdue invoices (${overdue})`);
   }
 
   const sale = await takeForSale(
@@ -90,6 +117,8 @@ export async function createInvoice(input: CreateInvoiceInput, actor: UserDocume
     rep: sale.rep,
     items,
     total,
+    discount: round2(gross - total),
+    dueDate: dueDateFor(customer.paymentTermDays),
     paidAmount,
     remaining: round2(Math.max(total - paidAmount, 0)),
     previousDebtPaid: round2(Math.max(paidAmount - total, 0)),
@@ -108,7 +137,26 @@ export async function createInvoice(input: CreateInvoiceInput, actor: UserDocume
 
   await logSale(MovementType.SALE, { ...sale, invoice: invoice._id }, actor);
   await syncCustomerSummary(customer._id);
-  return invoice.populate(withRefs);
+  return notifyInvoice(await invoice.populate(withRefs), actor);
+}
+
+async function notifyInvoice<T extends InstanceType<typeof InvoiceModel>>(
+  invoice: T,
+  actor: UserDocument,
+  cancelled = false,
+) {
+  await notify(
+    {
+      type: DocumentType.SALE,
+      cancelled,
+      docId: invoice.id,
+      number: invoice.invoiceNumber,
+      party: invoice.customer,
+      amount: invoice.total,
+    },
+    actor,
+  );
+  return invoice;
 }
 
 export function listInvoices({ customerId, visitId }: ListInvoicesFilters, actor: UserDocument) {
@@ -154,7 +202,7 @@ export async function cancelInvoice(id: string, reason: string, actor: UserDocum
   await returnSale(sale);
   await logSale(MovementType.SALE_CANCEL, { ...sale, invoice: invoice._id }, actor);
   await syncCustomerSummary(invoice.customer._id);
-  return invoice.populate(withRefs);
+  return notifyInvoice(await invoice.populate(withRefs), actor, true);
 }
 
 export async function addAttachment(

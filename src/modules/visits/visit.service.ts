@@ -12,6 +12,7 @@ import { getCustomerById } from '../customers/customer.service.js';
 import { UserModel, type UserDocument } from '../users/user.model.js';
 import { UserRole } from '../users/user.types.js';
 import { AppError } from '../../utils/api-response.js';
+import { VISIT, notify } from '../notifications/notification.service.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -54,6 +55,7 @@ export async function createVisit(input: CreateVisitInput, actor: UserDocument) 
     purpose: input.purpose,
     scheduledAt: input.scheduledAt,
   });
+  await notify({ type: VISIT, docId: visit.id, number: null, party: customer }, actor);
   return visit.populate(withRefs);
 }
 

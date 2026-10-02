@@ -1,6 +1,12 @@
 import type { Request, Response } from 'express';
 import * as userService from './user.service.js';
-import { createUserSchema, updateStatusSchema, updateUserSchema } from './user.validation.js';
+import { repTargetReport, targetReport } from './targets.service.js';
+import {
+  createUserSchema,
+  periodSchema,
+  updateStatusSchema,
+  updateUserSchema,
+} from './user.validation.js';
 import { ok } from '../../utils/api-response.js';
 
 type IdParams = { id: string };
@@ -26,4 +32,12 @@ export async function update(req: Request<IdParams>, res: Response) {
 export async function updateStatus(req: Request<IdParams>, res: Response) {
   const { isActive } = updateStatusSchema.parse(req.body);
   ok(res, await userService.setUserStatus(req.params.id, isActive, req.user!));
+}
+
+export async function targets(req: Request, res: Response) {
+  ok(res, await targetReport(periodSchema.parse(req.query)));
+}
+
+export async function repTargets(req: Request<IdParams>, res: Response) {
+  ok(res, await repTargetReport(req.params.id, periodSchema.parse(req.query)));
 }

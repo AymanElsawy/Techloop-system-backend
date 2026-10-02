@@ -9,6 +9,9 @@ const itemSchema = new Schema(
     name: { type: String, required: true },
     unit: { type: String, default: null },
     unitPrice: { type: Number, required: true },
+    // Average purchase price at sale time, for profit reports; null on old invoices / never-bought products.
+    unitCost: { type: Number, default: null },
+    discountPercent: { type: Number, default: 0 }, // total = unitPrice × quantity − this %
     quantity: { type: Number, required: true },
     total: { type: Number, required: true },
     fromCustody: { type: Number, default: 0 }, // taken from the rep's custody; the rest from the warehouse
@@ -47,7 +50,9 @@ const invoiceSchema = new Schema(
     items: { type: [itemSchema], required: true },
 
     // ponytail: plain Number (EGP), rounded to 2 decimals; move to integer piasters with the accounting work.
-    total: { type: Number, required: true },
+    total: { type: Number, required: true }, // after discount
+    discount: { type: Number, default: 0 }, // sum of the line discounts (EGP)
+    dueDate: { type: Date, default: null }, // from the customer's payment terms; null = no terms
     paidAmount: { type: Number, required: true, default: 0 },
     remaining: { type: Number, required: true }, // left unpaid on this invoice
     previousDebtPaid: { type: Number, default: 0 }, // paid above the total, settles older debt

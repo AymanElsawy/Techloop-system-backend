@@ -44,8 +44,18 @@ function assertInRegion(governorate: string | undefined, actor: UserDocument) {
   }
 }
 
+/** Credit limit, payment terms and discount are the managers' call. */
+const MANAGER_FIELDS = ['creditLimit', 'paymentTermDays', 'discountPercent'] as const;
+
+function assertCanSetCreditLimit(input: UpdateCustomerInput, actor: UserDocument) {
+  const set = MANAGER_FIELDS.filter((f) => input[f] !== undefined);
+  if (set.length && !isManager(actor))
+    throw new AppError(403, `Sales reps cannot edit: ${set.join(', ')}`);
+}
+
 export function createCustomer(input: CreateCustomerInput, actor: UserDocument) {
   assertInRegion(input.governorate, actor);
+  assertCanSetCreditLimit(input, actor);
   const approved = isManager(actor);
   return CustomerModel.create({
     ...input,
@@ -84,6 +94,7 @@ export async function updateCustomer(id: string, input: UpdateCustomerInput, act
     String(customer.createdBy._id) === String(actor._id);
 
   assertInRegion(input.governorate ?? undefined, actor);
+  assertCanSetCreditLimit(input, actor);
 
   // Reps may update contact details of any customer they can see, except rejected ones.
   if (!isManager(actor) && !ownPending) {

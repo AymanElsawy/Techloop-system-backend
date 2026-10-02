@@ -9,6 +9,7 @@ import { ReturnModel } from '../returns/return.model.js';
 import { UserRole } from '../users/user.types.js';
 import type { UserDocument } from '../users/user.model.js';
 import { authenticate } from '../../middleware/auth.middleware.js';
+import { authorize } from '../../middleware/role.middleware.js';
 import { ok } from '../../utils/api-response.js';
 
 /** Every printable document in one list: sales, collections, purchases, custody moves, handovers. */
@@ -182,6 +183,6 @@ async function listDocuments(filters: z.infer<typeof listSchema>, actor: UserDoc
 
 export const documentRoutes = Router();
 
-documentRoutes.get('/', authenticate, async (req, res) => {
+documentRoutes.get('/', authenticate, authorize(UserRole.OWNER, UserRole.ADMIN), async (req, res) => {
   ok(res, await listDocuments(listSchema.parse(req.query), req.user!));
 });

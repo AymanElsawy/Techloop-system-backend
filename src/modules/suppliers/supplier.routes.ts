@@ -13,3 +13,7 @@ supplierRoutes.get('/', supplierController.list);
 supplierRoutes.post('/', supplierController.create);
 supplierRoutes.get('/:id', supplierController.getById);
 supplierRoutes.patch('/:id', supplierController.update);
+supplierRoutes.post('/:id/share-link', supplierController.shareLink);
+supplierRoutes.post('/:id/payments', supplierController.createPayment);
+supplierRoutes.get('/:id/payments', supplierController.listPayments);
+supplierRoutes.post('/payments/:paymentId/cancel', supplierController.cancelPayment);

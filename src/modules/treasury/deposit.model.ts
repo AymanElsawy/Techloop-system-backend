@@ -8,7 +8,8 @@ const depositSchema = new Schema(
     receivedBy: { type: Types.ObjectId, ref: 'User', required: true },
     invoices: [{ type: Types.ObjectId, ref: 'Invoice' }],
     collections: [{ type: Types.ObjectId, ref: 'Collection' }],
-    total: { type: Number, required: true },
+    expenses: [{ type: Types.ObjectId, ref: 'TreasuryEntry' }], // the rep's expenses accepted here
+    total: { type: Number, required: true }, // payments − expenses: what was actually handed over
     notes: { type: String, default: null },
   },
   {

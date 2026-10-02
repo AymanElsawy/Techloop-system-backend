@@ -10,7 +10,16 @@ export const createInvoiceSchema = z
     visitId: objectId.nullish(),
     warehouseId: objectId.nullish(), // managers only; reps always sell from their own warehouse
     items: z
-      .array(z.object({ productId: objectId, quantity: z.number().int().positive() }))
+      .array(
+        z.object({
+          productId: objectId,
+          quantity: z.number().int().positive(),
+          // Omitted = the product's sale price. Anyone may sell at any price.
+          unitPrice: z.number().nonnegative().optional(),
+          // Omitted = the customer's discount. A rep can't go above it.
+          discountPercent: z.number().min(0).max(100).optional(),
+        }),
+      )
       .min(1)
       .refine(
         (items) => new Set(items.map((i) => i.productId)).size === items.length,

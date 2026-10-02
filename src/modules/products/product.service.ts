@@ -8,8 +8,14 @@ import type {
 import type { UserDocument } from '../users/user.model.js';
 import { UserRole } from '../users/user.types.js';
 import { AppError } from '../../utils/api-response.js';
-import { totalsByProduct } from '../inventory/inventory.service.js';
+import {
+  findActiveWarehouse,
+  receiveStock,
+  totalsByProduct,
+} from '../inventory/inventory.service.js';
 import { findActiveSupplier } from '../suppliers/supplier.service.js';
+import { InvoiceModel } from '../invoices/invoice.model.js';
+import { MovementModel, StockModel } from '../inventory/inventory.model.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -22,8 +28,28 @@ async function withSupplier<T extends { supplierId?: string | null }>({ supplier
   return { ...rest, supplier: supplierId && (await findActiveSupplier(supplierId))._id };
 }
 
-export async function createProduct(input: CreateProductInput, actor: UserDocument) {
-  return (await withQuantity([await ProductModel.create(await withSupplier(input))], actor))[0];
+/** With `stock`, the new product is received right away (same as a warehouse receipt). */
+export async function createProduct({ stock, ...input }: CreateProductInput, actor: UserDocument) {
+  if (stock) {
+    if (!input.supplierId) throw new AppError(400, 'Supplier is required to receive stock');
+    await findActiveWarehouse(stock.warehouseId); // fail before creating the product
+  }
+  let product = await ProductModel.create(await withSupplier(input));
+  if (stock) {
+    const { warehouseId, paidAmount, ...item } = stock;
+    await receiveStock(
+      warehouseId,
+      {
+        supplierId: input.supplierId!,
+        items: [{ productId: product.id, ...item }],
+        paidAmount,
+        notes: null,
+      },
+      actor,
+    );
+    product = (await ProductModel.findById(product._id))!; // receipt set its costs
+  }
+  return (await withQuantity([product], actor))[0];
 }
 
 const COST_FIELDS = ['avgCost', 'lastCost', 'lastSupplier', 'lastPurchaseAt', 'supplier'] as const;
@@ -88,4 +114,16 @@ export async function updateProduct(id: string, input: UpdateProductInput, actor
   const product = await findProduct(id, actor);
   product.set(await withSupplier(input));
   return (await withQuantity([await product.save()], actor))[0];
+}
+
+/** Only a product that was never received, moved or sold; anything with history gets deactivated instead. */
+export async function deleteProduct(id: string, actor: UserDocument) {
+  const product = await findProduct(id, actor);
+  const used =
+    (await MovementModel.exists({ 'items.product': product._id })) ||
+    (await InvoiceModel.exists({ 'items.product': product._id })) ||
+    (await StockModel.exists({ product: product._id, quantity: { $gt: 0 } }));
+  if (used) throw new AppError(409, 'Product has stock or history; deactivate it instead');
+  await StockModel.deleteMany({ product: product._id });
+  await product.deleteOne();
 }

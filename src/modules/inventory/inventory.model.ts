@@ -53,7 +53,11 @@ const movementSchema = new Schema(
     rep: { type: Types.ObjectId, ref: 'User', default: null, index: true },
     invoice: { type: Types.ObjectId, ref: 'Invoice', default: null },
     supplier: { type: Types.ObjectId, ref: 'Supplier', default: null, index: true }, // RECEIVE only
+    toWarehouse: { type: Types.ObjectId, ref: 'Warehouse', default: null, index: true }, // TRANSFER only
     items: { type: [movementItemSchema], required: true },
+    // RECEIVE only: total purchase cost and what was actually paid now; the rest is supplier debt.
+    totalCost: { type: Number, default: null },
+    paidAmount: { type: Number, default: null },
     notes: { type: String, default: null },
     createdBy: { type: Types.ObjectId, ref: 'User', required: true },
   },

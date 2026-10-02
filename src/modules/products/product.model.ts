@@ -7,18 +7,20 @@ const productSchema = new Schema(
     code: { type: String, default: null },
     unit: { type: String, enum: [...Object.values(ProductUnit), null], default: null },
     // ponytail: plain Number (EGP), same as customers; move to integer piasters with invoices.
+    // سعر البيع: only the default on a new invoice line; the seller may sell at any price.
     price: { type: Number, required: true, min: 0 },
     // Stock lives per warehouse / rep custody (inventory module). The API adds the total as `quantity`.
     minQuantity: { type: Number, default: null }, // low-stock alert threshold on the total
     // Purchase costs, updated by warehouse receipts (managers only; hidden from reps).
     avgCost: { type: Number, default: null }, // weighted moving average over total stock
-    lastCost: { type: Number, default: null },
+    lastCost: { type: Number, default: null }, // سعر الشراء: set on the product form or by the last receipt
     lastSupplier: { type: Schema.Types.ObjectId, ref: 'Supplier', default: null },
     lastPurchaseAt: { type: Date, default: null },
     // Main supplier, picked on the product form (managers only). Receipts may still use others.
     supplier: { type: Schema.Types.ObjectId, ref: 'Supplier', default: null },
     manufacturer: { type: String, default: null },
     expiryDate: { type: Date, default: null },
+    expiryAlertedFor: { type: Date, default: null }, // the expiryDate managers were already told about
     notes: { type: String, default: null },
     isActive: { type: Boolean, default: true },
   },

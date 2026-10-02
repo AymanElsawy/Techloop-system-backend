@@ -10,6 +10,8 @@ userRoutes.use(authenticate, authorize(UserRole.OWNER, UserRole.ADMIN));
 
 userRoutes.post('/', userController.create);
 userRoutes.get('/', userController.list);
+userRoutes.get('/targets', userController.targets);
+userRoutes.get('/targets/:id', userController.repTargets);
 userRoutes.get('/:id', userController.getById);
 userRoutes.patch('/:id', userController.update);
 userRoutes.patch('/:id/status', userController.updateStatus);

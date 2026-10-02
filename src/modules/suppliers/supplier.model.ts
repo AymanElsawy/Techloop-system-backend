@@ -9,6 +9,10 @@ const supplierSchema = new Schema(
     address: { type: String, default: null },
     notes: { type: String, default: null },
     isActive: { type: Boolean, default: true },
+    // Never set directly through the suppliers API; synced from receive movements and payments.
+    debt: { type: Number, default: 0 },
+    // Fixed public balance link (رابط المديونية); created on first use, see modules/public/statement.ts.
+    shareToken: { type: String, default: null },
   },
   {
     timestamps: true,
@@ -21,6 +25,11 @@ const supplierSchema = new Schema(
       },
     },
   },
+);
+
+supplierSchema.index(
+  { shareToken: 1 },
+  { unique: true, partialFilterExpression: { shareToken: { $type: 'string' } } },
 );
 
 export type Supplier = InferSchemaType<typeof supplierSchema>;

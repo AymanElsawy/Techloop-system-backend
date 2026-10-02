@@ -14,3 +14,4 @@ productRoutes.get('/', productController.list);
 productRoutes.get('/:id', productController.getById);
 productRoutes.post('/', managersOnly, productController.create);
 productRoutes.patch('/:id', managersOnly, productController.update);
+productRoutes.delete('/:id', managersOnly, productController.remove);

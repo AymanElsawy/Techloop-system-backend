@@ -9,9 +9,16 @@ async function assertWarehouse(warehouse: string | null | undefined) {
   if (warehouse) await findActiveWarehouse(warehouse);
 }
 
+/** Every new user's first password; they must replace it on first login. */
+export const DEFAULT_PASSWORD = '123456A';
+
 export async function createUser(input: CreateUserInput) {
   await assertWarehouse(input.warehouse);
-  return UserModel.create({ ...input, password: await hashPassword(input.password) });
+  return UserModel.create({
+    ...input,
+    password: await hashPassword(DEFAULT_PASSWORD),
+    mustChangePassword: true,
+  });
 }
 
 export function listUsers() {

@@ -12,6 +12,8 @@ import {
 import type { UserDocument } from '../users/user.model.js';
 import { UserRole } from '../users/user.types.js';
 import { AppError } from '../../utils/api-response.js';
+import { STOCK_RETURNED, notify, notifyWarehouse } from '../notifications/notification.service.js';
+import { DocumentType } from '../documents/documents.routes.js';
 
 const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
 
@@ -75,13 +77,16 @@ export async function createReturn(input: z.infer<typeof createReturnSchema>, ac
     if (!line) throw new AppError(400, 'Product is not on this invoice');
     const left = line.quantity - (returned.get(productId) ?? 0);
     if (quantity > left) throw new AppError(400, `Only ${left} of ${line.name} can be returned`);
+    // Returned at the price actually paid (after the line's discount).
+    const unitPrice = round2(line.unitPrice * (1 - (line.discountPercent ?? 0) / 100));
     return {
       product: line.product,
       name: line.name,
       unit: line.unit,
-      unitPrice: line.unitPrice,
+      unitPrice,
+      unitCost: line.unitCost ?? null,
       quantity,
-      total: round2(line.unitPrice * quantity),
+      total: round2(unitPrice * quantity),
     };
   });
 
@@ -113,7 +118,27 @@ export async function createReturn(input: z.infer<typeof createReturnSchema>, ac
     throw err;
   }
   await syncCustomerSummary(invoice.customer);
-  return doc.populate(withRefs);
+  if (!target.rep) await notifyWarehouse(STOCK_RETURNED, target.warehouse, actor);
+  return notifyReturn(await doc.populate(withRefs), actor);
+}
+
+async function notifyReturn<T extends InstanceType<typeof ReturnModel>>(
+  doc: T,
+  actor: UserDocument,
+  cancelled = false,
+) {
+  await notify(
+    {
+      type: DocumentType.SALE_RETURN,
+      cancelled,
+      docId: doc.id,
+      number: doc.number,
+      party: doc.customer,
+      amount: doc.total,
+    },
+    actor,
+  );
+  return doc;
 }
 
 export function listReturns(
@@ -155,5 +180,5 @@ export async function cancelReturn(id: string, reason: string, actor: UserDocume
   });
   await doc.save();
   await syncCustomerSummary(doc.customer);
-  return doc.populate(withRefs);
+  return notifyReturn(await doc.populate(withRefs), actor, true);
 }

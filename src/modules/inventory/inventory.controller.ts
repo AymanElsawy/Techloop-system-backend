@@ -1,18 +1,20 @@
 import type { Request, Response } from 'express';
 import * as inventoryService from './inventory.service.js';
 import {
+  adjustSchema,
   createWarehouseSchema,
   listMovementsSchema,
   receiveSchema,
   transferSchema,
   updateWarehouseSchema,
+  warehouseTransferSchema,
 } from './inventory.validation.js';
 import { ok } from '../../utils/api-response.js';
 
 type IdParams = { id: string };
 
-export async function listWarehouses(_req: Request, res: Response) {
-  ok(res, await inventoryService.listWarehouses());
+export async function listWarehouses(req: Request, res: Response) {
+  ok(res, await inventoryService.listWarehouses(req.user!));
 }
 
 export async function createWarehouse(req: Request, res: Response) {
@@ -20,7 +22,7 @@ export async function createWarehouse(req: Request, res: Response) {
 }
 
 export async function getWarehouse(req: Request<IdParams>, res: Response) {
-  ok(res, await inventoryService.getWarehouseDetails(req.params.id));
+  ok(res, await inventoryService.getWarehouseDetails(req.params.id, req.user!));
 }
 
 export async function updateWarehouse(req: Request<IdParams>, res: Response) {
@@ -54,4 +56,14 @@ export async function myStock(req: Request, res: Response) {
 
 export async function getMovement(req: Request<{ id: string }>, res: Response) {
   ok(res, await inventoryService.getMovement(req.params.id, req.user!));
+}
+
+export async function adjust(req: Request<IdParams>, res: Response) {
+  const input = adjustSchema.parse(req.body);
+  ok(res, await inventoryService.adjustStock(req.params.id, input, req.user!), 201);
+}
+
+export async function transfer(req: Request<IdParams>, res: Response) {
+  const input = warehouseTransferSchema.parse(req.body);
+  ok(res, await inventoryService.transferStock(req.params.id, input, req.user!), 201);
 }

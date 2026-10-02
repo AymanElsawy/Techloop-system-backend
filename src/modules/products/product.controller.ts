@@ -25,3 +25,8 @@ export async function update(req: Request<IdParams>, res: Response) {
   const input = updateProductSchema.parse(req.body);
   ok(res, await productService.updateProduct(req.params.id, input, req.user!));
 }
+
+export async function remove(req: Request<IdParams>, res: Response) {
+  await productService.deleteProduct(req.params.id, req.user!);
+  ok(res, null);
+}

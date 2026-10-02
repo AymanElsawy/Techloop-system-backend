@@ -9,6 +9,8 @@ const schema = z.object({
   JWT_EXPIRES_IN: z.string().default('7d'),
   CORS_ORIGIN: z.string().min(1),
   UPLOAD_DIR: z.string().default('uploads'),
+  BACKUP_DIR: z.string().default('backups'),
+  BACKUP_KEEP: z.coerce.number().int().min(0).default(14), // daily backups kept; 0 turns them off
 });
 
 const parsed = schema.safeParse(process.env);

@@ -12,6 +12,11 @@ customerRoutes.get('/', customerController.list);
 customerRoutes.post('/', customerController.create);
 customerRoutes.get('/:id', customerController.getById);
 customerRoutes.patch('/:id', customerController.update);
+customerRoutes.post(
+  '/:id/share-link',
+  authorize(UserRole.OWNER, UserRole.ADMIN),
+  customerController.shareLink,
+);
 customerRoutes.patch(
   '/:id/approve',
   authorize(UserRole.OWNER, UserRole.ADMIN),

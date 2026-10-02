@@ -11,9 +11,11 @@ import { visibilityFilter } from '../customers/customer.service.js';
 import { ProductModel } from '../products/product.model.js';
 import { StockModel } from '../inventory/inventory.model.js';
 import { totalsByProduct } from '../inventory/inventory.service.js';
-import { getSummary, listPending } from '../treasury/treasury.service.js';
+import { cashBoxOf, getSummary } from '../treasury/treasury.service.js';
+import { SupplierModel } from '../suppliers/supplier.model.js';
 import { UserModel, type UserDocument } from '../users/user.model.js';
 import { UserRole } from '../users/user.types.js';
+import { targetReport } from '../users/targets.service.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -80,6 +82,7 @@ export async function getDashboard(actor: UserDocument) {
   const cheque = {
     paymentMethod: PaymentMethod.CHEQUE,
     chequeDueDate: { $gte: startOfDay, $lt: in14Days },
+    chequeStatus: null, // not cashed or bounced yet
   };
 
   const [
@@ -238,7 +241,7 @@ export async function getDashboard(actor: UserDocument) {
 
   if (!manager) {
     const [pending, custody] = await Promise.all([
-      listPending(undefined, actor),
+      cashBoxOf(actor._id),
       StockModel.aggregate<{ items: number; quantity: number }>([
         { $match: { warehouse: null, rep: actor._id, quantity: { $gt: 0 } } },
         { $group: { _id: null, items: { $sum: 1 }, quantity: { $sum: '$quantity' } } },
@@ -246,23 +249,32 @@ export async function getDashboard(actor: UserDocument) {
     ]);
     return {
       ...base,
-      cashBox: { total: round2(pending.reduce((s, p) => s + p.amount, 0)), count: pending.length },
+      cashBox: { total: pending.total, count: pending.count }, // minus the rep's pending expenses
       custody: { items: custody[0]?.items ?? 0, quantity: custody[0]?.quantity ?? 0 },
     };
   }
 
-  const [treasury, products, totals, reps] = await Promise.all([
+  const [treasury, products, totals, reps, [suppliers], targets, yearTargets] = await Promise.all([
     getSummary(),
-    ProductModel.find({ isActive: true }).select('name unit minQuantity avgCost'),
+    ProductModel.find({ isActive: true }).select('name unit minQuantity avgCost lastCost'),
     totalsByProduct(),
     UserModel.find({ role: UserRole.SALES_REP, isActive: true }).select('name').sort({ name: 1 }),
+    SupplierModel.aggregate<{ debt: number; count: number }>([
+      { $match: { debt: { $gt: 0 } } },
+      { $group: { _id: null, debt: { $sum: '$debt' }, count: { $sum: 1 } } },
+    ]),
+    targetReport(),
+    targetReport({ year: String(now.getFullYear()) }),
   ]);
+  const target = new Map(targets.reps.map((t) => [t.id, t]));
+  const yearTarget = new Map(yearTargets.reps.map((t) => [t.id, t]));
   const qty = (id: string) => totals.get(id) ?? 0;
   const held = new Map(treasury.pendingByRep.map((p) => [p.rep.id, p.total]));
   const byRep = (id: string) => (r: Row) => String(r._id.rep) === id;
 
   return {
     ...base,
+    suppliers: { debt: round2(suppliers?.debt ?? 0), count: suppliers?.count ?? 0 },
     treasury: {
       total: treasury.total,
       byMethod: treasury.byMethod,
@@ -270,7 +282,7 @@ export async function getDashboard(actor: UserDocument) {
     },
     stock: {
       products: products.length,
-      value: round2(products.reduce((s, p) => s + qty(p.id) * (p.avgCost ?? 0), 0)),
+      value: round2(products.reduce((s, p) => s + qty(p.id) * (p.avgCost ?? p.lastCost ?? 0), 0)),
       lowStock: products
         .filter((p) => p.minQuantity != null && qty(p.id) <= p.minQuantity)
         .map((p) => ({
@@ -295,6 +307,11 @@ export async function getDashboard(actor: UserDocument) {
       ),
       visitsToday: visitCount((v) => String(v._id.rep) === rep.id && v._id.today),
       cashHeld: held.get(rep.id) ?? 0,
+      salesProgress: target.get(rep.id)?.salesProgress ?? null,
+      collectionProgress: target.get(rep.id)?.collectionProgress ?? null,
+      commission: target.get(rep.id)?.commission ?? 0,
+      yearSalesProgress: yearTarget.get(rep.id)?.salesProgress ?? null,
+      yearCollectionProgress: yearTarget.get(rep.id)?.collectionProgress ?? null,
     })),
   };
 }

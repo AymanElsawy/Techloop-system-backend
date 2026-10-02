@@ -11,6 +11,7 @@ const itemSchema = new Schema(
     name: { type: String, required: true },
     unit: { type: String, default: null },
     unitPrice: { type: Number, required: true }, // the price on the original invoice
+    unitCost: { type: Number, default: null }, // the cost on the original invoice line
     quantity: { type: Number, required: true },
     total: { type: Number, required: true },
   },

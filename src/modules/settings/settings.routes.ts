@@ -3,7 +3,9 @@ import { Schema, model } from 'mongoose';
 import { z } from 'zod';
 import { authenticate } from '../../middleware/auth.middleware.js';
 import { authorize } from '../../middleware/role.middleware.js';
-import { ok } from '../../utils/api-response.js';
+import path from 'node:path';
+import { AppError, ok } from '../../utils/api-response.js';
+import { BACKUP_DIR, BACKUP_NAME, createBackup, listBackups } from './backup.js';
 import { UserRole } from '../users/user.types.js';
 
 /** Company details printed on every document. One document, key 'company'. */
@@ -70,4 +72,29 @@ settingsRoutes.put('/company', authorize(UserRole.OWNER, UserRole.ADMIN), async 
       returnDocument: 'after',
     }),
   );
+});
+
+// Backups: the whole database + attachments, so the owner only.
+const ownerOnly = authorize(UserRole.OWNER);
+
+settingsRoutes.get('/backups', ownerOnly, async (_req, res) => {
+  ok(res, await listBackups());
+});
+
+settingsRoutes.post('/backups', ownerOnly, async (_req, res) => {
+  try {
+    ok(res, await createBackup(), 201);
+  } catch (err) {
+    console.error('Backup failed:', err);
+    throw new AppError(500, 'Backup failed');
+  }
+});
+
+settingsRoutes.get('/backups/:name', ownerOnly, (req, res) => {
+  const name = String(req.params.name);
+  if (!BACKUP_NAME.test(name)) throw new AppError(404, 'Backup not found');
+  res.download(path.join(BACKUP_DIR, name), name, (err) => {
+    if (err && !res.headersSent)
+      res.status(404).json({ success: false, message: 'Backup not found' });
+  });
 });
