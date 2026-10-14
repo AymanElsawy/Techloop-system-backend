@@ -10,6 +10,7 @@ import {
   warehouseTransferSchema,
 } from './inventory.validation.js';
 import { ok } from '../../utils/api-response.js';
+import { sendList } from '../../utils/paginate.js';
 
 type IdParams = { id: string };
 
@@ -47,7 +48,7 @@ export async function returnStock(req: Request<IdParams>, res: Response) {
 
 export async function listMovements(req: Request, res: Response) {
   const filters = listMovementsSchema.parse(req.query);
-  ok(res, await inventoryService.listMovements(filters, req.user!));
+  await sendList(res, req.query, inventoryService.listMovements(filters, req.user!));
 }
 
 export async function myStock(req: Request, res: Response) {

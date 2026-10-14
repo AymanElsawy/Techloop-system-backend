@@ -16,6 +16,7 @@ import {
 import { findActiveSupplier } from '../suppliers/supplier.service.js';
 import { InvoiceModel } from '../invoices/invoice.model.js';
 import { MovementModel, StockModel } from '../inventory/inventory.model.js';
+import { AuditAction, AuditEntity, audit } from '../audit/audit.service.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -112,8 +113,16 @@ export async function getProductById(id: string, actor: UserDocument) {
 
 export async function updateProduct(id: string, input: UpdateProductInput, actor: UserDocument) {
   const product = await findProduct(id, actor);
+  const before = product.toObject();
   product.set(await withSupplier(input));
-  return (await withQuantity([await product.save()], actor))[0];
+  await product.save();
+  await audit(actor, AuditAction.UPDATE, AuditEntity.PRODUCT, {
+    docId: product.id,
+    title: product.name,
+    before,
+    after: product.toObject(),
+  });
+  return (await withQuantity([product], actor))[0];
 }
 
 /** Only a product that was never received, moved or sold; anything with history gets deactivated instead. */
@@ -126,4 +135,8 @@ export async function deleteProduct(id: string, actor: UserDocument) {
   if (used) throw new AppError(409, 'Product has stock or history; deactivate it instead');
   await StockModel.deleteMany({ product: product._id });
   await product.deleteOne();
+  await audit(actor, AuditAction.DELETE, AuditEntity.PRODUCT, {
+    docId: product.id,
+    title: product.name,
+  });
 }

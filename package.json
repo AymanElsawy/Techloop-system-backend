@@ -8,8 +8,10 @@
     "start": "node dist/server.js",
     "lint": "eslint .",
     "seed": "tsx src/database/seed.ts",
+    "seed:demo": "tsx src/database/seed-demo.ts",
     "migrate:stock": "tsx src/database/migrate-stock.ts",
-    "migrate:usernames": "tsx src/database/migrate-usernames.ts"
+    "migrate:usernames": "tsx src/database/migrate-usernames.ts",
+    "migrate:balances": "tsx src/database/migrate-balances.ts"
   },
   "keywords": [],
   "author": "",

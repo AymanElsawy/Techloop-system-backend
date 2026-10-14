@@ -47,6 +47,13 @@ export const periodSchema = z.object({
     .optional(),
 });
 
+export const listUsersSchema = z.object({ search: z.string().trim().max(100).optional() });
+
+/** Targets page: the period + a rep-name search. */
+export const targetsQuerySchema = periodSchema.extend({
+  search: z.string().trim().max(100).optional(),
+});
+
 export const updateUserSchema = createUserSchema.partial().extend({ password: passwordSchema.optional() });
 
 export const updateStatusSchema = z.object({

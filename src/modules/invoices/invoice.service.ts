@@ -20,6 +20,7 @@ import { MovementType } from '../inventory/inventory.types.js';
 import { ReturnModel, ReturnStatus } from '../returns/return.model.js';
 import { notify } from '../notifications/notification.service.js';
 import { DocumentType } from '../documents/documents.routes.js';
+import { AuditAction, AuditEntity, audit } from '../audit/audit.service.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -202,6 +203,13 @@ export async function cancelInvoice(id: string, reason: string, actor: UserDocum
   await returnSale(sale);
   await logSale(MovementType.SALE_CANCEL, { ...sale, invoice: invoice._id }, actor);
   await syncCustomerSummary(invoice.customer._id);
+  await audit(actor, AuditAction.CANCEL, AuditEntity.INVOICE, {
+    docId: invoice.id,
+    title: invoice.invoiceNumber,
+    party: invoice.customer,
+    amount: invoice.total,
+    reason,
+  });
   return notifyInvoice(await invoice.populate(withRefs), actor, true);
 }
 

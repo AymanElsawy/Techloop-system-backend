@@ -7,6 +7,7 @@ import { PaymentMethod } from '../invoices/invoice.types.js';
 import type { UserDocument } from '../users/user.model.js';
 import { AppError } from '../../utils/api-response.js';
 import { SUPPLIER_PAYMENT, notify } from '../notifications/notification.service.js';
+import { AuditAction, AuditEntity, audit } from '../audit/audit.service.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -69,13 +70,21 @@ export async function cancelPayment(paymentId: string, reason: string, actor: Us
   });
   await payment.save();
   await syncSupplierDebt(payment.supplier);
+  const supplier = await findSupplier(payment.supplier);
+  await audit(actor, AuditAction.CANCEL, AuditEntity.SUPPLIER_PAYMENT, {
+    docId: payment.supplier,
+    title: payment.number,
+    party: supplier,
+    amount: payment.amount,
+    reason,
+  });
   await notify(
     {
       type: SUPPLIER_PAYMENT,
       cancelled: true,
       docId: payment.supplier,
       number: payment.number,
-      party: await findSupplier(payment.supplier),
+      party: supplier,
       amount: payment.amount,
     },
     actor,

@@ -3,10 +3,14 @@ import { connectDatabase } from './config/database.js';
 import { app } from './app.js';
 import { scheduleBackups } from './modules/settings/backup.js';
 import { scheduleExpiryAlerts } from './modules/inventory/expiry-alerts.js';
+import { scheduleChequeAlerts } from './modules/treasury/cheque-alerts.js';
+import { scheduleBalanceCheck } from './modules/customers/balance-check.js';
 
 await connectDatabase();
 scheduleBackups();
 scheduleExpiryAlerts();
+scheduleChequeAlerts();
+scheduleBalanceCheck();
 
 app.listen(env.PORT, () => {
   console.log(`Server running on http://localhost:${env.PORT}`);

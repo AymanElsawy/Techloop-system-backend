@@ -13,12 +13,13 @@ import {
 import { ok } from '../../utils/api-response.js';
 import { SupplierModel } from './supplier.model.js';
 import { ensureShareToken } from '../public/statement.js';
+import { sendList } from '../../utils/paginate.js';
 
 type IdParams = { id: string };
 type PaymentIdParams = { paymentId: string };
 
 export async function list(req: Request, res: Response) {
-  ok(res, await supplierService.listSuppliers(listSuppliersSchema.parse(req.query)));
+  await sendList(res, req.query, supplierService.listSuppliers(listSuppliersSchema.parse(req.query)));
 }
 
 export async function create(req: Request, res: Response) {

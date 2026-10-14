@@ -14,6 +14,7 @@ import { UserRole } from '../users/user.types.js';
 import { AppError } from '../../utils/api-response.js';
 import { STOCK_RETURNED, notify, notifyWarehouse } from '../notifications/notification.service.js';
 import { DocumentType } from '../documents/documents.routes.js';
+import { AuditAction, AuditEntity, audit } from '../audit/audit.service.js';
 
 const objectId = z.string().regex(/^[0-9a-f]{24}$/i, 'Invalid id');
 
@@ -180,5 +181,13 @@ export async function cancelReturn(id: string, reason: string, actor: UserDocume
   });
   await doc.save();
   await syncCustomerSummary(doc.customer);
-  return notifyReturn(await doc.populate(withRefs), actor, true);
+  await doc.populate(withRefs);
+  await audit(actor, AuditAction.CANCEL, AuditEntity.RETURN, {
+    docId: doc.id,
+    title: doc.number,
+    party: doc.customer,
+    amount: doc.total,
+    reason,
+  });
+  return notifyReturn(doc, actor, true);
 }

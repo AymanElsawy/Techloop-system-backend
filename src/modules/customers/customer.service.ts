@@ -9,6 +9,7 @@ import type {
 import type { UserDocument } from '../users/user.model.js';
 import { UserRole } from '../users/user.types.js';
 import { AppError } from '../../utils/api-response.js';
+import { AuditAction, AuditEntity, audit } from '../audit/audit.service.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -107,8 +108,16 @@ export async function updateCustomer(id: string, input: UpdateCustomerInput, act
       throw new AppError(403, `Sales reps cannot edit: ${restricted.join(', ')}`);
   }
 
+  const before = customer.toObject();
   customer.set(input);
-  return customer.save();
+  await customer.save();
+  await audit(actor, AuditAction.UPDATE, AuditEntity.CUSTOMER, {
+    docId: customer.id,
+    title: customer.name,
+    before,
+    after: customer.toObject(),
+  });
+  return customer;
 }
 
 export async function approveCustomer(id: string, actor: UserDocument) {
@@ -123,6 +132,10 @@ export async function approveCustomer(id: string, actor: UserDocument) {
     reviewedAt: new Date(),
   });
   await customer.save();
+  await audit(actor, AuditAction.APPROVE, AuditEntity.CUSTOMER, {
+    docId: customer.id,
+    title: customer.name,
+  });
   return customer.populate(withPeople);
 }
 
@@ -138,5 +151,10 @@ export async function rejectCustomer(id: string, reason: string, actor: UserDocu
     reviewedAt: new Date(),
   });
   await customer.save();
+  await audit(actor, AuditAction.REJECT, AuditEntity.CUSTOMER, {
+    docId: customer.id,
+    title: customer.name,
+    reason,
+  });
   return customer.populate(withPeople);
 }

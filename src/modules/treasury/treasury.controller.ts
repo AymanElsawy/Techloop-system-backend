@@ -10,6 +10,7 @@ import {
   repFilterSchema,
 } from './treasury.validation.js';
 import { ok } from '../../utils/api-response.js';
+import { sendList } from '../../utils/paginate.js';
 import { UserRole } from '../users/user.types.js';
 
 export async function summary(_req: Request, res: Response) {
@@ -23,7 +24,7 @@ export async function pending(req: Request, res: Response) {
 
 export async function listDeposits(req: Request, res: Response) {
   const { repId } = repFilterSchema.parse(req.query);
-  ok(res, await treasuryService.listDeposits(repId, req.user!));
+  await sendList(res, req.query, treasuryService.listDeposits(repId, req.user!));
 }
 
 export async function getDeposit(req: Request<{ id: string }>, res: Response) {
@@ -36,7 +37,7 @@ export async function createDeposit(req: Request, res: Response) {
 }
 
 export async function listEntries(req: Request, res: Response) {
-  ok(res, await treasuryService.listEntries(listEntriesSchema.parse(req.query), req.user!));
+  await sendList(res, req.query, treasuryService.listEntries(listEntriesSchema.parse(req.query), req.user!));
 }
 
 /** Managers: expense / withdrawal / bank deposit. A rep: an expense from their own cash box. */

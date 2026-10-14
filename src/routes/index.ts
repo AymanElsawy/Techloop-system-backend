@@ -15,6 +15,7 @@ import { settingsRoutes } from '../modules/settings/settings.routes.js';
 import { returnRoutes } from '../modules/returns/return.routes.js';
 import { notificationRoutes } from '../modules/notifications/notification.routes.js';
 import { reportRoutes } from '../modules/reports/report.routes.js';
+import { auditRoutes } from '../modules/audit/audit.routes.js';
 import { publicRoutes } from '../modules/public/statement.js';
 
 export const routes = Router();
@@ -35,6 +36,7 @@ routes.use('/settings', settingsRoutes);
 routes.use('/returns', returnRoutes);
 routes.use('/notifications', notificationRoutes);
 routes.use('/reports', reportRoutes);
+routes.use('/audit-log', auditRoutes);
 // No login: public balance links (رابط المديونية).
 routes.use('/public', publicRoutes);
 // Next phases: /orders

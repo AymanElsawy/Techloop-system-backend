@@ -11,6 +11,7 @@ import { AppError } from '../../utils/api-response.js';
 import { assertLinkableVisit } from '../visits/visit.service.js';
 import { notify } from '../notifications/notification.service.js';
 import { DocumentType } from '../documents/documents.routes.js';
+import { AuditAction, AuditEntity, audit } from '../audit/audit.service.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -36,7 +37,7 @@ export async function createCollection(input: CreateCollectionInput, actor: User
     : null;
   const amount = round2(input.amount);
 
-  // Money already collected but not handed over is excluded, so it can't be collected twice.
+  // Money a rep already collected is deducted from the debt right away, so it can't be collected twice.
   const debt = await getCollectableDebt(customer._id);
   if (amount > debt) {
     throw new AppError(400, `Amount exceeds the customer's debt (${debt})`);
@@ -115,6 +116,13 @@ export async function cancelCollection(id: string, reason: string, actor: UserDo
   });
   await collection.save();
   await syncCustomerSummary(collection.customer._id);
+  await audit(actor, AuditAction.CANCEL, AuditEntity.COLLECTION, {
+    docId: collection.id,
+    title: collection.receiptNumber,
+    party: collection.customer,
+    amount: collection.amount,
+    reason,
+  });
   return notifyCollection(await collection.populate(withRefs), actor, true);
 }
 

@@ -6,6 +6,7 @@ import {
   updateProductSchema,
 } from './product.validation.js';
 import { ok } from '../../utils/api-response.js';
+import { sendList } from '../../utils/paginate.js';
 
 type IdParams = { id: string };
 
@@ -14,7 +15,7 @@ export async function create(req: Request, res: Response) {
 }
 
 export async function list(req: Request, res: Response) {
-  ok(res, await productService.listProducts(listProductsSchema.parse(req.query), req.user!));
+  await sendList(res, req.query, productService.listProducts(listProductsSchema.parse(req.query), req.user!));
 }
 
 export async function getById(req: Request<IdParams>, res: Response) {

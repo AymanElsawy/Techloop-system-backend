@@ -1,4 +1,4 @@
-import type { PipelineStage } from 'mongoose';
+import type { PipelineStage, Types } from 'mongoose';
 import { InvoiceModel } from '../invoices/invoice.model.js';
 import { InvoiceStatus } from '../invoices/invoice.types.js';
 import { ReturnModel, ReturnStatus } from '../returns/return.model.js';
@@ -9,7 +9,8 @@ import { MovementType } from '../inventory/inventory.types.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-export type GroupBy = 'product' | 'governorate' | 'rep';
+// 'customer' is internal (the customers report), not offered on /reports/sales.
+export type GroupBy = 'product' | 'governorate' | 'rep' | 'customer';
 
 type Sums = {
   _id: unknown;
@@ -31,9 +32,12 @@ function sumLines(
   groupBy: GroupBy,
   repField: string,
 ) {
-  const key = { product: '$items.product', governorate: '$customer.governorate', rep: repField }[
-    groupBy
-  ];
+  const key = {
+    product: '$items.product',
+    governorate: '$customer.governorate',
+    rep: repField,
+    customer: '$customer',
+  }[groupBy];
   const pipeline: PipelineStage[] = [
     { $match: match },
     { $unwind: '$items' },
@@ -115,9 +119,17 @@ export type SalesRow = {
   costMissing: boolean;
 };
 
-/** Net sales (minus returns), cost and profit per product / governorate / rep in [from, to]. */
-export async function salesReport(groupBy: GroupBy, from: Date, to: Date) {
-  const period = { createdAt: { $gte: from, $lte: to } };
+/**
+ * Net sales (minus returns), cost and profit per product / governorate / rep / customer in [from, to].
+ * `where` narrows both invoices and returns (e.g. `{ customer }`).
+ */
+export async function salesReport(
+  groupBy: GroupBy,
+  from: Date,
+  to: Date,
+  where: Record<string, unknown> = {},
+) {
+  const period = { createdAt: { $gte: from, $lte: to }, ...where };
   const active = { status: InvoiceStatus.ACTIVE, ...period };
   const [sold, returned, invoiceCount] = await Promise.all([
     sumLines(InvoiceModel, active, groupBy, '$createdBy'),
@@ -271,7 +283,7 @@ export async function agingReport(now = new Date()) {
  * مشتريات الصنف: what each supplier sold each product for (receipts), optionally in [from, to].
  * One row per product + supplier, cheapest average first within a product.
  */
-export async function purchasesReport(from?: Date, to?: Date) {
+export async function purchasesReport(from?: Date, to?: Date, supplier?: Types.ObjectId) {
   const rows = await MovementModel.aggregate<{
     product: { id: string; name: string };
     supplier: { id: string; name: string };
@@ -288,6 +300,7 @@ export async function purchasesReport(from?: Date, to?: Date) {
     {
       $match: {
         type: MovementType.RECEIVE,
+        ...(supplier && { supplier }),
         ...((from || to) && {
           createdAt: { ...(from && { $gte: from }), ...(to && { $lte: to }) },
         }),

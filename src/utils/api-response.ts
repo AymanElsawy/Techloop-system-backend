@@ -9,6 +9,6 @@ export class AppError extends Error {
   }
 }
 
-export function ok(res: Response, data: unknown, status = 200) {
-  res.status(status).json({ success: true, data });
+export function ok(res: Response, data: unknown, status = 200, meta?: Record<string, unknown>) {
+  res.status(status).json({ success: true, data, ...(meta && { meta }) });
 }

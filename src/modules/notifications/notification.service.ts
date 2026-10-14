@@ -14,6 +14,16 @@ export const CASH_TAKEN = 'CASH_TAKEN';
 // To a warehouse rep: someone else added stock to / returned goods into their warehouse. No details.
 export const STOCK_ADDED = 'STOCK_ADDED';
 export const STOCK_RETURNED = 'STOCK_RETURNED';
+// A cheque is due within 2 days (no actor). CHEQUE_DUE: received from a customer, docId is the
+// invoice / collection. SUPPLIER_CHEQUE_DUE: written to a supplier, docId is the supplier.
+export const CHEQUE_DUE = 'CHEQUE_DUE';
+export const SUPPLIER_CHEQUE_DUE = 'SUPPLIER_CHEQUE_DUE';
+// To owners: the nightly check fixed `quantity` stored balances (details in سجل العمليات).
+export const BALANCES_FIXED = 'BALANCES_FIXED';
+// طلب عهدة: a rep asked for goods (to managers + that warehouse's reps; party = the rep), and the
+// rep is told when it's rejected. When it's issued the rep gets the usual ISSUE.
+export const CUSTODY_REQUEST = 'CUSTODY_REQUEST';
+export const CUSTODY_REJECTED = 'CUSTODY_REJECTED';
 const EXTRA_TYPES = [
   SUPPLIER_PAYMENT,
   VISIT,
@@ -23,6 +33,11 @@ const EXTRA_TYPES = [
   CASH_TAKEN,
   STOCK_ADDED,
   STOCK_RETURNED,
+  CHEQUE_DUE,
+  SUPPLIER_CHEQUE_DUE,
+  BALANCES_FIXED,
+  CUSTODY_REQUEST,
+  CUSTODY_REJECTED,
 ] as const;
 type NotificationType = DocumentType | (typeof EXTRA_TYPES)[number];
 
@@ -50,6 +65,7 @@ const NotificationModel = model(
       amount: { type: Number, default: null },
       quantity: { type: Number, default: null }, // stock alerts: total left
       expiryDate: { type: Date, default: null }, // EXPIRY_SOON
+      dueDate: { type: Date, default: null }, // CHEQUE_DUE / SUPPLIER_CHEQUE_DUE
       readAt: { type: Date, default: null },
     },
     {
@@ -82,6 +98,7 @@ type Event = {
   amount?: number | null;
   quantity?: number | null;
   expiryDate?: Date | null;
+  dueDate?: Date | null;
 };
 
 /**
@@ -115,12 +132,17 @@ export async function notify(
       amount: event.amount ?? null,
       quantity: event.quantity ?? null,
       expiryDate: event.expiryDate ?? null,
+      dueDate: event.dueDate ?? null,
     };
     await NotificationModel.insertMany([...users].map((user) => ({ ...data, user })));
   } catch (err) {
     console.error('notify failed', err);
   }
 }
+
+/** True when this exact alert was already sent (to anyone); scheduled alerts use it to send once. */
+export const wasNotified = (type: NotificationType, docId: string, number: string | null, dueDate: Date) =>
+  NotificationModel.exists({ type, docId, number, dueDate }).then(Boolean);
 
 /** Tells the warehouse reps of `warehouse` (except the actor) that its stock changed. Never throws. */
 export async function notifyWarehouse(
@@ -144,7 +166,7 @@ export async function notifyWarehouse(
   }
 }
 
-// ponytail: fixed cap and no cleanup; add paging / a TTL index when the collection grows.
+// ponytail: no cleanup; add a TTL index when the collection grows. The cap only applies without `?page=`.
 export const listNotifications = (actor: UserDocument) =>
   NotificationModel.find({ user: actor._id }).sort({ createdAt: -1 }).limit(100);
 

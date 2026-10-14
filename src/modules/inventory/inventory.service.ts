@@ -38,7 +38,7 @@ const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
 
 /** A warehouse rep only operates their assigned warehouse; managers operate any. */
-function assertWarehouseAccess(actor: UserDocument, warehouseId: Id) {
+export function assertWarehouseAccess(actor: UserDocument, warehouseId: Id) {
   if (actor.role === UserRole.WAREHOUSE_REP && String(actor.warehouse) !== String(warehouseId)) {
     throw new AppError(403, 'Forbidden');
   }
@@ -80,7 +80,7 @@ async function moveItems(from: Location | null, to: Location | null, items: Line
   if (to) for (const item of items) await put(to, item.product, item.quantity);
 }
 
-async function toLineItems(items: StockItemInput): Promise<LineItem[]> {
+export async function toLineItems(items: StockItemInput): Promise<LineItem[]> {
   const ids = items.map((i) => i.productId);
   const products = await ProductModel.find({ _id: { $in: ids } });
   if (products.length !== ids.length) throw new AppError(400, 'One or more products not found');

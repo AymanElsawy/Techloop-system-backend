@@ -27,6 +27,7 @@ import { UserRole } from '../users/user.types.js';
 import { AppError } from '../../utils/api-response.js';
 import { CASH_TAKEN, REP_EXPENSE, notify } from '../notifications/notification.service.js';
 import { DocumentType } from '../documents/documents.routes.js';
+import { AuditAction, AuditEntity, audit } from '../audit/audit.service.js';
 
 const isManager = (actor: UserDocument) =>
   actor.role === UserRole.OWNER || actor.role === UserRole.ADMIN;
@@ -367,6 +368,8 @@ const depositRefs = [{ path: 'rep receivedBy', select: 'name' }];
 export function listDeposits(repId: string | undefined, actor: UserDocument) {
   const rep = isManager(actor) ? repId : actor.id;
   return DepositModel.find(rep ? { rep } : {})
+    // Raw id arrays: clients expect populated `payments` / `expenses` (details only).
+    .select('-invoices -collections -expenses')
     .sort({ createdAt: -1 })
     .limit(300) // ponytail: fixed cap, add paging when needed
     .populate(depositRefs);
@@ -395,8 +398,9 @@ export function listEntries({ type, repId, pending }: ListEntriesFilters, actor:
   const rep = isManager(actor) ? repId : actor.id;
   return TreasuryEntryModel.find({
     ...(type && { type }),
-    ...(rep && { rep }),
+    // pendingExpense carries `rep: { $ne: null }`, so the rep filter must come after it.
     ...(pending && pendingExpense),
+    ...(rep && { rep }),
   })
     .sort({ createdAt: -1 })
     .limit(300) // ponytail: fixed cap, add paging when needed
@@ -463,6 +467,12 @@ export async function cancelEntry(id: string, reason: string, actor: UserDocumen
     cancelledAt: new Date(),
   });
   await entry.save();
+  await audit(actor, AuditAction.CANCEL, AuditEntity.TREASURY_ENTRY, {
+    docId: entry.id,
+    title: entry.number,
+    amount: entry.amount,
+    reason,
+  });
   return entry.populate(entryRefs);
 }
 
@@ -503,5 +513,17 @@ export async function setChequeStatus(
         );
   if (!doc) throw new AppError(400, 'Cheque is not in the treasury');
   if (status === ChequeStatus.BOUNCED) await syncCustomerSummary(doc.customer);
+  await audit(
+    actor,
+    AuditAction.UPDATE,
+    kind === 'INVOICE' ? AuditEntity.INVOICE : AuditEntity.COLLECTION,
+    {
+      docId: doc.id,
+      title: 'invoiceNumber' in doc ? doc.invoiceNumber : doc.receiptNumber,
+      amount: 'invoiceNumber' in doc ? doc.paidAmount : doc.amount,
+      before: { chequeStatus: null },
+      after: { chequeStatus: status },
+    },
+  );
   return { id: doc.id as string, kind, chequeStatus: doc.chequeStatus };
 }

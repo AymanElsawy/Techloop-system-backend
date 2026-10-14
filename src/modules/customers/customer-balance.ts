@@ -6,27 +6,28 @@ import { CollectionModel } from '../collections/collection.model.js';
 import { CollectionStatus } from '../collections/collection.types.js';
 import { ChequeStatus, DepositStatus } from '../treasury/treasury.types.js';
 import { ReturnModel, ReturnStatus } from '../returns/return.model.js';
-import { balanceEvents } from '../public/statement.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const isPending = { $eq: ['$depositStatus', DepositStatus.PENDING] };
-// Nothing was received: still with a rep, or a bounced cheque.
-const notReceived = {
-  $or: [isPending, { $eq: ['$chequeStatus', ChequeStatus.BOUNCED] }],
-};
+// Money a rep received counts as paid right away, even before it reaches the treasury.
+// Only a bounced cheque is not received.
+const notReceived = { $eq: ['$chequeStatus', ChequeStatus.BOUNCED] };
 
 /**
  * Balance over active entries.
- * - net: invoice totals minus deposited payments (up-front on invoices, including any amount
- *   settling older debt, plus collections). Positive = customer owes.
- *   Active sales returns (فواتير مرتجع) reduce it too. Bounced cheques don't count as paid.
- * - pending: payments still in a rep's cash box; they reduce `net` only once handed over.
+ * - net: invoice totals minus payments (up-front on invoices, including any amount settling
+ *   older debt, plus collections), whether still with a rep or already in the treasury.
+ *   Positive = customer owes. Active sales returns (فواتير مرتجع) reduce it too.
+ *   Bounced cheques don't count as paid.
+ * - pending: the part of those payments still in a rep's cash box (info only, already in `net`).
  */
-export async function getCustomerBalance(customerId: Types.ObjectId) {
+export async function getCustomerBalance(customerId: Types.ObjectId, before?: Date) {
+  // `before`: the balance as it stood then (opening balance of a statement period).
+  const when = before ? { createdAt: { $lt: before } } : {};
   const [[invoices], [collections], [returns]] = await Promise.all([
     InvoiceModel.aggregate<{ net: number; pending: number }>([
-      { $match: { customer: customerId, status: InvoiceStatus.ACTIVE } },
+      { $match: { customer: customerId, status: InvoiceStatus.ACTIVE, ...when } },
       {
         $group: {
           _id: null,
@@ -36,7 +37,7 @@ export async function getCustomerBalance(customerId: Types.ObjectId) {
       },
     ]),
     CollectionModel.aggregate<{ deposited: number; pending: number }>([
-      { $match: { customer: customerId, status: CollectionStatus.ACTIVE } },
+      { $match: { customer: customerId, status: CollectionStatus.ACTIVE, ...when } },
       {
         $group: {
           _id: null,
@@ -46,7 +47,7 @@ export async function getCustomerBalance(customerId: Types.ObjectId) {
       },
     ]),
     ReturnModel.aggregate<{ total: number }>([
-      { $match: { customer: customerId, status: ReturnStatus.ACTIVE } },
+      { $match: { customer: customerId, status: ReturnStatus.ACTIVE, ...when } },
       { $group: { _id: null, total: { $sum: '$total' } } },
     ]),
   ]);
@@ -93,10 +94,10 @@ export async function getOverdue(customerId: Types.ObjectId, now = new Date()) {
 export const dueDateFor = (paymentTermDays: number | null | undefined, now = new Date()) =>
   paymentTermDays == null ? null : new Date(now.getTime() + paymentTermDays * DAY);
 
-/** What can still be collected: the debt minus money already collected but not handed over. */
+/** What can still be collected: the current debt (rep-held money is already deducted). */
 export async function getCollectableDebt(customerId: Types.ObjectId) {
-  const { net, pending } = await getCustomerBalance(customerId);
-  return Math.max(round2(net - pending), 0);
+  const { net } = await getCustomerBalance(customerId);
+  return Math.max(net, 0);
 }
 
 /**
@@ -106,7 +107,7 @@ export async function getCollectableDebt(customerId: Types.ObjectId) {
  *
  * - debit (مدين): net amount the customer owes.
  * - credit (دائن): net amount owed to the customer (only after cancelling an already-paid invoice).
- * - pendingPayments: collected by a rep, not handed to the treasury yet (not deducted from debit).
+ * - pendingPayments: collected by a rep, not handed to the treasury yet (already deducted from debit).
  * - lastCollection: latest money received, up-front on an invoice or via a collection.
  */
 export async function syncCustomerSummary(customerId: Types.ObjectId) {
@@ -143,5 +144,4 @@ export async function syncCustomerSummary(customerId: Types.ObjectId) {
       lastCollection: latestPayment,
     },
   );
-  balanceEvents.emit('change', String(customerId));
 }

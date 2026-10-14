@@ -10,7 +10,7 @@ import { UserRole } from '../users/user.types.js';
 import type { UserDocument } from '../users/user.model.js';
 import { authenticate } from '../../middleware/auth.middleware.js';
 import { authorize } from '../../middleware/role.middleware.js';
-import { ok } from '../../utils/api-response.js';
+import { sendList } from '../../utils/paginate.js';
 
 /** Every printable document in one list: sales, collections, purchases, custody moves, handovers. */
 export enum DocumentType {
@@ -184,5 +184,8 @@ async function listDocuments(filters: z.infer<typeof listSchema>, actor: UserDoc
 export const documentRoutes = Router();
 
 documentRoutes.get('/', authenticate, authorize(UserRole.OWNER, UserRole.ADMIN), async (req, res) => {
-  ok(res, await listDocuments(listSchema.parse(req.query), req.user!));
+  // `sum`: total of the non-cancelled rows across every page.
+  await sendList(res, req.query, listDocuments(listSchema.parse(req.query), req.user!), (all) => ({
+    sum: round2(all.reduce((s, d) => s + (d.status === 'ACTIVE' ? (d.amount ?? 0) : 0), 0)),
+  }));
 });

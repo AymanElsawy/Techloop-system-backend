@@ -3,6 +3,7 @@ import * as inventoryController from './inventory.controller.js';
 import { authenticate } from '../../middleware/auth.middleware.js';
 import { authorize } from '../../middleware/role.middleware.js';
 import { UserRole } from '../users/user.types.js';
+import { custodyRequestRoutes } from './custody-request.js';
 
 export const inventoryRoutes = Router();
 
@@ -13,6 +14,7 @@ const warehouseOps = authorize(UserRole.OWNER, UserRole.ADMIN, UserRole.WAREHOUS
 inventoryRoutes.use(authenticate);
 
 inventoryRoutes.get('/my-stock', inventoryController.myStock);
+inventoryRoutes.use('/requests', custodyRequestRoutes); // طلبات العهدة
 inventoryRoutes.get('/movements', inventoryController.listMovements);
 inventoryRoutes.get('/movements/:id', inventoryController.getMovement);
 

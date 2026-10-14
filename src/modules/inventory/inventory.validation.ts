@@ -20,7 +20,7 @@ export const updateWarehouseSchema = createWarehouseSchema
   .extend({ isActive: z.boolean() })
   .partial();
 
-const itemsSchema = z
+export const itemsSchema = z
   .array(z.object({ productId: objectId, quantity: z.number().int().positive() }))
   .min(1)
   .refine(

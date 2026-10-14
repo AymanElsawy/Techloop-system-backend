@@ -2,7 +2,7 @@ import { Schema } from 'mongoose';
 
 /**
  * Where money received from a customer is. A rep's money stays PENDING (in the rep's cash box)
- * until a manager records the handover; only then does it reduce the customer's debt.
+ * until a manager records the handover. It reduces the customer's debt right away either way.
  * Money a manager records directly is DEPOSITED at once. Documents written before this
  * field existed have no value and count as DEPOSITED.
  */

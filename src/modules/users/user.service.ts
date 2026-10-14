@@ -4,6 +4,7 @@ import type { CreateUserInput, UpdateUserInput } from './user.validation.js';
 import { hashPassword } from '../../utils/password.js';
 import { AppError } from '../../utils/api-response.js';
 import { assertCanChangeWarehouse, findActiveWarehouse } from '../inventory/inventory.service.js';
+import { AuditAction, AuditEntity, audit } from '../audit/audit.service.js';
 
 async function assertWarehouse(warehouse: string | null | undefined) {
   if (warehouse) await findActiveWarehouse(warehouse);
@@ -21,8 +22,14 @@ export async function createUser(input: CreateUserInput) {
   });
 }
 
-export function listUsers() {
-  return UserModel.find().sort({ createdAt: -1 });
+const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** search: name or username. */
+export function listUsers(search?: string) {
+  const pattern = search ? new RegExp(escapeRegex(search), 'i') : null;
+  return UserModel.find(pattern ? { $or: [{ name: pattern }, { username: pattern }] } : {}).sort({
+    createdAt: -1,
+  });
 }
 
 export async function getUserById(id: string) {
@@ -50,14 +57,30 @@ export async function updateUser(id: string, input: UpdateUserInput, actor: User
     await assertCanChangeWarehouse(user._id);
   }
   const { password, ...rest } = input;
+  const before = user.toObject();
   user.set(rest);
   if (password) user.password = await hashPassword(password);
-  return user.save();
+  await user.save();
+  await audit(actor, AuditAction.UPDATE, AuditEntity.USER, {
+    docId: user.id,
+    title: user.name,
+    before,
+    after: user.toObject(),
+  });
+  return user;
 }
 
 export async function setUserStatus(id: string, isActive: boolean, actor: UserDocument) {
   if (actor.id === id) throw new AppError(400, 'You cannot change your own status');
   const user = await getEditableUser(id, actor);
+  const before = user.toObject();
   user.isActive = isActive;
-  return user.save();
+  await user.save();
+  await audit(actor, AuditAction.UPDATE, AuditEntity.USER, {
+    docId: user.id,
+    title: user.name,
+    before,
+    after: user.toObject(),
+  });
+  return user;
 }

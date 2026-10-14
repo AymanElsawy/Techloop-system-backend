@@ -1,4 +1,3 @@
-import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import type { Model, Types } from 'mongoose';
@@ -18,12 +17,9 @@ import { ChequeStatus, DepositStatus } from '../treasury/treasury.types.js';
 
 /**
  * Public balance page (رابط المديونية): one fixed, unguessable link per customer / supplier that
- * shows their current balance outside the system and updates live (Server-Sent Events).
+ * shows their current balance outside the system. The page re-reads `/data` every few seconds:
+ * plain polling works through any proxy (Cloudflare quick tunnels don't pass Server-Sent Events).
  */
-
-/** Emits the customer / supplier id whenever its cached balance is recomputed. */
-// ponytail: in-process emitter, so live updates only reach viewers on the same Node process; use Redis pub/sub if the backend ever runs as several instances.
-export const balanceEvents = new EventEmitter().setMaxListeners(0);
 
 /** The record's share token, created on first use and never changed afterwards. */
 export async function ensureShareToken(
@@ -68,7 +64,7 @@ const paidNote = (p: Paid) =>
   p.chequeStatus === ChequeStatus.BOUNCED
     ? 'شيك مرتجع، متحسبش'
     : p.depositStatus === DepositStatus.PENDING
-      ? 'مع المندوب، بيتخصم لما يتسلم للخزنة'
+      ? 'مع المندوب، لسه متسلمش للخزنة'
       : null;
 const method = (p: Paid) =>
   p.paymentMethod ? METHOD_LABELS[p.paymentMethod as PaymentMethod] : null;
@@ -242,30 +238,9 @@ publicRoutes.get('/s/:token', async (req, res) => {
     .send(PAGE.replace('__NONCE__', nonce));
 });
 
-publicRoutes.get('/s/:token/events', async (req, res) => {
-  const { id, data } = await findByToken(req.params.token);
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-store',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no', // nginx: don't buffer the stream
-  });
-  const send = (d: unknown) => res.write(`data: ${JSON.stringify(d)}\n\n`);
-  send(data);
-
-  const onChange = (changedId: string) => {
-    if (changedId !== id) return;
-    findByToken(req.params.token).then(
-      (next) => send(next.data),
-      () => res.end(), // token gone
-    );
-  };
-  balanceEvents.on('change', onChange);
-  const ping = setInterval(() => res.write(':\n\n'), 25_000); // keeps proxies from closing it
-  req.on('close', () => {
-    balanceEvents.off('change', onChange);
-    clearInterval(ping);
-  });
+publicRoutes.get('/s/:token/data', async (req, res) => {
+  const { data } = await findByToken(req.params.token);
+  res.set('Cache-Control', 'no-store').json(data);
 });
 
 const PAGE = `<!doctype html>
@@ -324,9 +299,8 @@ const PAGE = `<!doctype html>
 <script nonce="__NONCE__">
   const $ = (id) => document.getElementById(id);
   const money = (n) => n.toLocaleString('ar-EG', { maximumFractionDigits: 2 }) + ' ج.م';
-  const es = new EventSource(location.pathname.replace(/\\/$/, '') + '/events');
-  es.onmessage = (e) => {
-    const d = JSON.parse(e.data);
+  const url = location.pathname.replace(/\\/$/, '') + '/data';
+  function render(d) {
     $('name').textContent = d.name;
     const amount = $('amount');
     if (d.debit > 0) {
@@ -343,12 +317,12 @@ const PAGE = `<!doctype html>
       amount.className = 'amount';
     }
     $('note').hidden = !(d.pending > 0);
-    $('note').textContent = d.pending > 0 ? 'مبلغ ' + money(d.pending) + ' مدفوع للمندوب وهيتخصم أول ما يتسلم للخزنة.' : '';
+    $('note').textContent = d.pending > 0 ? 'منها ' + money(d.pending) + ' مدفوعة للمندوب ولسه متسلمتش للخزنة (متخصومة من الحساب).' : '';
     $('status').textContent = 'متصل، بيتحدث تلقائي · آخر تعديل ' +
       new Date(d.updatedAt).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
     renderLines(d.lines);
     document.body.classList.remove('off');
-  };
+  }
   const TAGS = { purchase: 'شراء', payment: 'سداد', return: 'مرتجع' };
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -372,10 +346,20 @@ const PAGE = `<!doctype html>
     }));
     $('empty').hidden = lines.length > 0;
   }
-  es.onerror = () => {
-    document.body.classList.add('off');
-    $('status').textContent = 'انقطع الاتصال، بنحاول نتصل تاني...';
-  };
+  async function load() {
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      render(await r.json());
+    } catch {
+      document.body.classList.add('off');
+      $('status').textContent = 'انقطع الاتصال، بنحاول نتصل تاني...';
+    }
+  }
+  load();
+  // Every 5 s while the tab is visible, and right away when it comes back.
+  setInterval(() => document.hidden || load(), 5000);
+  document.addEventListener('visibilitychange', () => document.hidden || load());
 </script>
 </body>
 </html>`;

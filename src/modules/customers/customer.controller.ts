@@ -10,6 +10,7 @@ import { ok } from '../../utils/api-response.js';
 import { getOverdue } from './customer-balance.js';
 import { CustomerModel } from './customer.model.js';
 import { ensureShareToken } from '../public/statement.js';
+import { sendList } from '../../utils/paginate.js';
 
 type IdParams = { id: string };
 
@@ -22,7 +23,7 @@ export async function create(req: Request, res: Response) {
 }
 
 export async function list(req: Request, res: Response) {
-  ok(res, await customerService.listCustomers(listCustomersSchema.parse(req.query), req.user!));
+  await sendList(res, req.query, customerService.listCustomers(listCustomersSchema.parse(req.query), req.user!));
 }
 
 export async function getById(req: Request<IdParams>, res: Response) {
